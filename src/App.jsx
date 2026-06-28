@@ -16,7 +16,7 @@ const COINS = [
   { id: "matic-network", symbol: "MATIC" }, { id: "chainlink", symbol: "LINK" },
 ];
 
-const PROXY = "https://corsproxy.io/?";
+const PROXY = "https://api.allorigins.win/raw?url=";
 
 function calcRSI(closes, period = 14) {
   if (closes.length < period + 1) return null;
