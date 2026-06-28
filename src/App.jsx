@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from "recharts";
 
 const C = {
   bg: "#060810", panel: "#0b0e1a", border: "#141929", borderBright: "#1e2840",
@@ -16,6 +17,13 @@ const COINS = [
   { id: "matic-network", symbol: "MATIC" }, { id: "chainlink", symbol: "LINK" },
 ];
 
+const TIMEFRAMES = [
+  { label: "1G", days: 1 },
+  { label: "7G", days: 7 },
+  { label: "30G", days: 30 },
+  { label: "90G", days: 90 },
+];
+
 const proxy = (url) => `/api/proxy?url=${encodeURIComponent(url)}`;
 
 function calcRSI(closes, period = 14) {
@@ -30,6 +38,33 @@ function calcRSI(closes, period = 14) {
   return 100 - 100 / (1 + ag / al);
 }
 
+function calcRSISeries(closes, period = 14) {
+  const result = new Array(closes.length).fill(null);
+  for (let i = period; i < closes.length; i++) {
+    let gains = 0, losses = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const d = closes[j] - closes[j - 1];
+      if (d > 0) gains += d; else losses += Math.abs(d);
+    }
+    const ag = gains / period, al = losses / period;
+    result[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  }
+  return result;
+}
+
+function calcEMASeries(closes, period) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period) return result;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result[period - 1] = ema;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    result[i] = ema;
+  }
+  return result;
+}
+
 function calcEMA(closes, period) {
   if (closes.length < period) return null;
   const k = 2 / (period + 1);
@@ -38,11 +73,19 @@ function calcEMA(closes, period) {
   return ema;
 }
 
-function calcMACD(closes) {
-  const ema12 = calcEMA(closes, 12), ema26 = calcEMA(closes, 26);
-  if (!ema12 || !ema26) return null;
-  const macd = ema12 - ema26;
-  return { macd, signal: macd * 0.85, histogram: macd * 0.15 };
+function calcBollingerSeries(closes, period = 20) {
+  const upper = new Array(closes.length).fill(null);
+  const middle = new Array(closes.length).fill(null);
+  const lower = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const sma = slice.reduce((a, b) => a + b, 0) / period;
+    const std = Math.sqrt(slice.reduce((a, b) => a + Math.pow(b - sma, 2), 0) / period);
+    upper[i] = sma + 2 * std;
+    middle[i] = sma;
+    lower[i] = sma - 2 * std;
+  }
+  return { upper, middle, lower };
 }
 
 function calcBollinger(closes, period = 20) {
@@ -51,6 +94,25 @@ function calcBollinger(closes, period = 20) {
   const sma = slice.reduce((a, b) => a + b, 0) / period;
   const std = Math.sqrt(slice.reduce((a, b) => a + Math.pow(b - sma, 2), 0) / period);
   return { upper: sma + 2 * std, middle: sma, lower: sma - 2 * std };
+}
+
+function calcMACDSeries(closes) {
+  const ema12 = calcEMASeries(closes, 12);
+  const ema26 = calcEMASeries(closes, 26);
+  const macdLine = closes.map((_, i) => ema12[i] !== null && ema26[i] !== null ? ema12[i] - ema26[i] : null);
+  const signalLine = new Array(closes.length).fill(null);
+  const validMacd = macdLine.filter(v => v !== null);
+  if (validMacd.length >= 9) {
+    const startIdx = macdLine.findIndex(v => v !== null) + 8;
+    let sig = validMacd.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+    const k = 2 / 10;
+    signalLine[startIdx] = sig;
+    for (let i = startIdx + 1; i < closes.length; i++) {
+      if (macdLine[i] !== null) { sig = macdLine[i] * k + sig * (1 - k); signalLine[i] = sig; }
+    }
+  }
+  const histogram = closes.map((_, i) => macdLine[i] !== null && signalLine[i] !== null ? macdLine[i] - signalLine[i] : null);
+  return { macdLine, signalLine, histogram };
 }
 
 function calcATR(ohlc, period = 14) {
@@ -116,52 +178,30 @@ function computeSignal(ind) {
   }
   if (change24h < -6) { score += 1; reasons.push({ t: "Forte calo 24h = potenziale rimbalzo", v: `${change24h.toFixed(1)}%`, good: true }); }
   else if (change24h > 8) { score -= 1; reasons.push({ t: "Forte rialzo 24h = attenzione pullback", v: `+${change24h.toFixed(1)}%`, good: false }); }
-
   let gridAdvice = "";
-  if (regime === "laterale") gridAdvice = "✅ Mercato LATERALE: condizioni IDEALI per grid bot. Attiva o mantieni il bot.";
-  else if (regime === "volatile") gridAdvice = "⚠️ Mercato VOLATILE: il grid bot può subire perdite rapide. Valuta di ridurre il range o sospendere.";
-  else if (regime === "trend_rialzista") gridAdvice = "📈 TREND RIALZISTA: considera grid asimmetrico verso l'alto. Rischio di essere venduto troppo presto.";
-  else if (regime === "trend_ribassista") gridAdvice = "📉 TREND RIBASSISTA: il grid bot compra in caduta. Rischio accumulo perdite. Valuta stop del bot.";
-
+  if (regime === "laterale") gridAdvice = "✅ Mercato LATERALE: condizioni IDEALI per grid bot.";
+  else if (regime === "volatile") gridAdvice = "⚠️ Mercato VOLATILE: il grid bot può subire perdite rapide.";
+  else if (regime === "trend_rialzista") gridAdvice = "📈 TREND RIALZISTA: grid asimmetrico verso l'alto.";
+  else if (regime === "trend_ribassista") gridAdvice = "📉 TREND RIBASSISTA: rischio accumulo perdite. Valuta stop del bot.";
   let signal, color, emoji;
   if (score >= 4) { signal = "ENTRA"; color = C.green; emoji = "🟢"; }
   else if (score <= -3) { signal = "ESCI"; color = C.red; emoji = "🔴"; }
   else if (score >= 2) { signal = "POSSIBILE ENTRATA"; color = "#80ff80"; emoji = "🟡"; }
   else if (score <= -1) { signal = "ATTENZIONE"; color = C.yellow; emoji = "🟡"; }
   else { signal = "ATTENDI"; color = C.yellow; emoji = "🟡"; }
-
   return { signal, color, emoji, score, reasons, gridAdvice, regime };
 }
 
 async function getAIAdvice(indicators, botConfig, triggers, coinSymbol) {
-  const prompt = `Sei un advisor professionale di trading crypto. Analizza questa situazione e dai consigli pratici in italiano.
-
-COIN: ${coinSymbol}/USDT
-PREZZO: $${indicators.price?.toFixed(2)}
-VARIAZIONE 24H: ${indicators.change24h?.toFixed(2)}%
-RSI: ${indicators.rsi?.toFixed(1)}
-EMA20: $${indicators.ema20?.toFixed(2)}
-EMA50: $${indicators.ema50?.toFixed(2)}
-EMA200: $${indicators.ema200?.toFixed(2)}
-MACD: ${indicators.macd?.macd?.toFixed(2)}
-BB upper: $${indicators.bb?.upper?.toFixed(2)}, lower: $${indicators.bb?.lower?.toFixed(2)}
-ATR: $${indicators.atr?.toFixed(2)}
-REGIME: ${indicators.regime}
-FEAR & GREED: ${indicators.fearGreed ?? "N/D"}/100
-SUPPORTO: $${indicators.sr?.support?.toFixed(2)}
-RESISTENZA: $${indicators.sr?.resistance?.toFixed(2)}
-${botConfig.active ? `BOT GRID: tipo ${botConfig.type}, range $${botConfig.priceMin}-$${botConfig.priceMax}, ${botConfig.gridCount} griglie, capitale $${botConfig.capital}` : "Nessun bot configurato."}
-${triggers.entry ? `ENTRY TRIGGER: $${triggers.entry}` : ""}
-${triggers.tp ? `TAKE PROFIT: $${triggers.tp}` : ""}
-${triggers.sl ? `STOP LOSS: $${triggers.sl}` : ""}
-
-Rispondi con:
-1. SITUAZIONE ATTUALE (2-3 frasi)
-2. COSA FARE ORA (consiglio diretto)
-3. RISCHI DA MONITORARE (2 punti)
-4. LIVELLI CHIAVE suggeriti
-Max 250 parole. Sii diretto e usa numeri precisi.`;
-
+  const prompt = `Sei un advisor professionale di trading crypto. Analizza e dai consigli in italiano.
+COIN: ${coinSymbol}/USDT | PREZZO: $${indicators.price?.toFixed(2)} | VAR 24H: ${indicators.change24h?.toFixed(2)}%
+RSI: ${indicators.rsi?.toFixed(1)} | EMA20: $${indicators.ema20?.toFixed(2)} | EMA50: $${indicators.ema50?.toFixed(2)} | EMA200: $${indicators.ema200?.toFixed(2)}
+MACD: ${indicators.macd?.macd?.toFixed(2)} | BB upper: $${indicators.bb?.upper?.toFixed(2)}, lower: $${indicators.bb?.lower?.toFixed(2)}
+ATR: $${indicators.atr?.toFixed(2)} | REGIME: ${indicators.regime} | F&G: ${indicators.fearGreed}/100
+SUPPORTO: $${indicators.sr?.support?.toFixed(2)} | RESISTENZA: $${indicators.sr?.resistance?.toFixed(2)}
+${botConfig.active ? `BOT: ${botConfig.type}, $${botConfig.priceMin}-$${botConfig.priceMax}, ${botConfig.gridCount} griglie, $${botConfig.capital}` : "Nessun bot."}
+${triggers.entry ? `ENTRY: $${triggers.entry}` : ""} ${triggers.tp ? `TP: $${triggers.tp}` : ""} ${triggers.sl ? `SL: $${triggers.sl}` : ""}
+Rispondi: 1.SITUAZIONE 2.COSA FARE ORA 3.RISCHI 4.LIVELLI CHIAVE. Max 250 parole.`;
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -170,6 +210,50 @@ Max 250 parole. Sii diretto e usa numeri precisi.`;
   const data = await response.json();
   return data.content?.[0]?.text ?? "Analisi non disponibile.";
 }
+
+// Candlestick custom shape
+const CandleBar = (props) => {
+  const { x, y, width, height, open, close, high, low, payload } = props;
+  if (!payload) return null;
+  const isUp = payload.close >= payload.open;
+  const color = isUp ? "#00e676" : "#ff3d5a";
+  const bodyTop = Math.min(payload.open, payload.close);
+  const bodyBot = Math.max(payload.open, payload.close);
+  const chartMin = props.yAxisMin || 0;
+  const chartMax = props.yAxisMax || 1;
+  const chartH = props.chartHeight || 300;
+  const toY = (val) => chartH - ((val - chartMin) / (chartMax - chartMin)) * chartH;
+  const bTop = toY(bodyTop);
+  const bBot = toY(bodyBot);
+  const hTop = toY(payload.high);
+  const hBot = toY(payload.low);
+  const cx = x + width / 2;
+  const bH = Math.max(1, bBot - bTop);
+  return (
+    <g>
+      <line x1={cx} y1={hTop} x2={cx} y2={hBot} stroke={color} strokeWidth={1} />
+      <rect x={x + 1} y={bTop} width={Math.max(1, width - 2)} height={bH} fill={color} stroke={color} strokeWidth={0.5} opacity={0.9} />
+    </g>
+  );
+};
+
+const CustomTooltipPrice = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const d = payload[0]?.payload;
+  if (!d) return null;
+  return (
+    <div style={{ background: "#0b0e1a", border: "1px solid #1e2840", borderRadius: 8, padding: "8px 12px", fontSize: 11 }}>
+      <div style={{ color: "#7c8db5", marginBottom: 4 }}>{label}</div>
+      {d.open && <div style={{ color: "#e8edf8" }}>O: <b>${d.open?.toFixed(2)}</b></div>}
+      {d.high && <div style={{ color: "#00e676" }}>H: <b>${d.high?.toFixed(2)}</b></div>}
+      {d.low && <div style={{ color: "#ff3d5a" }}>L: <b>${d.low?.toFixed(2)}</b></div>}
+      {d.close && <div style={{ color: "#00d4ff" }}>C: <b>${d.close?.toFixed(2)}</b></div>}
+      {d.ema20 && <div style={{ color: "#ffd600" }}>EMA20: <b>${d.ema20?.toFixed(2)}</b></div>}
+      {d.ema50 && <div style={{ color: "#ff8c00" }}>EMA50: <b>${d.ema50?.toFixed(2)}</b></div>}
+      {d.ema200 && <div style={{ color: "#b388ff" }}>EMA200: <b>${d.ema200?.toFixed(2)}</b></div>}
+    </div>
+  );
+};
 
 const Panel = ({ children, style = {} }) => (
   <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 12, ...style }}>{children}</div>
@@ -211,8 +295,58 @@ export default function App() {
   const [fearGreed, setFearGreed] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [countdown, setCountdown] = useState(60);
+  const [chartData, setChartData] = useState([]);
+  const [chartTF, setChartTF] = useState(TIMEFRAMES[2]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [showEMA20, setShowEMA20] = useState(true);
+  const [showEMA50, setShowEMA50] = useState(true);
+  const [showEMA200, setShowEMA200] = useState(true);
+  const [showBB, setShowBB] = useState(true);
   const [botConfig, setBotConfig] = useState({ active: false, type: "spot", priceMin: "", priceMax: "", gridCount: "", capital: "" });
   const [triggers, setTriggers] = useState({ entry: "", tp: "", sl: "" });
+
+  const fetchChart = useCallback(async (coinId, days) => {
+    setChartLoading(true);
+    try {
+      const ohlcRes = await fetch(proxy(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`));
+      const ohlcData = await ohlcRes.json();
+      const closes = ohlcData.map(c => c[4]);
+      const ema20s = calcEMASeries(closes, 20);
+      const ema50s = calcEMASeries(closes, 50);
+      const ema200s = calcEMASeries(closes, Math.min(200, closes.length - 1));
+      const bbs = calcBollingerSeries(closes);
+      const rsiSeries = calcRSISeries(closes);
+      const macdSeries = calcMACDSeries(closes);
+
+      const fmt = (ts) => {
+        const d = new Date(ts);
+        if (days <= 1) return d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+        if (days <= 7) return d.toLocaleDateString("it-IT", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+        return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" });
+      };
+
+      const data = ohlcData.map((c, i) => ({
+        time: fmt(c[0]),
+        open: c[1], high: c[2], low: c[3], close: c[4],
+        ema20: ema20s[i] ? parseFloat(ema20s[i].toFixed(2)) : null,
+        ema50: ema50s[i] ? parseFloat(ema50s[i].toFixed(2)) : null,
+        ema200: ema200s[i] ? parseFloat(ema200s[i].toFixed(2)) : null,
+        bbUpper: bbs.upper[i] ? parseFloat(bbs.upper[i].toFixed(2)) : null,
+        bbMiddle: bbs.middle[i] ? parseFloat(bbs.middle[i].toFixed(2)) : null,
+        bbLower: bbs.lower[i] ? parseFloat(bbs.lower[i].toFixed(2)) : null,
+        rsi: rsiSeries[i] ? parseFloat(rsiSeries[i].toFixed(2)) : null,
+        macd: macdSeries.macdLine[i] ? parseFloat(macdSeries.macdLine[i].toFixed(4)) : null,
+        macdSignal: macdSeries.signalLine[i] ? parseFloat(macdSeries.signalLine[i].toFixed(4)) : null,
+        macdHist: macdSeries.histogram[i] ? parseFloat(macdSeries.histogram[i].toFixed(4)) : null,
+        candleColor: c[4] >= c[1] ? "#00e676" : "#ff3d5a",
+      }));
+      setChartData(data);
+    } catch (e) {
+      console.error("Chart error", e);
+    } finally {
+      setChartLoading(false);
+    }
+  }, []);
 
   const fetchMarket = useCallback(async () => {
     setLoading(true);
@@ -238,12 +372,12 @@ export default function App() {
       const ema20 = calcEMA(closes, 20);
       const ema50 = calcEMA(closes, 50);
       const ema200 = calcEMA(closes, Math.min(200, closes.length - 1));
-      const macd = calcMACD(closes);
+      const macdVal = (() => { const e12 = calcEMA(closes, 12), e26 = calcEMA(closes, 26); if (!e12 || !e26) return null; const m = e12 - e26; return { macd: m, signal: m * 0.85 }; })();
       const bb = calcBollinger(closes);
       const atr = calcATR(ohlcData);
       const sr = calcSR(closes);
       const regime = detectRegime(closes, atr, price);
-      const ind = { price, change24h, volume24h, high24h, low24h, marketCap, rsi, ema20, ema50, ema200, macd, bb, atr, sr, regime, fearGreed: fg };
+      const ind = { price, change24h, volume24h, high24h, low24h, marketCap, rsi, ema20, ema50, ema200, macd: macdVal, bb, atr, sr, regime, fearGreed: fg };
       const sig = computeSignal(ind);
       setMarketData({ price, change24h, volume24h, high24h, low24h, marketCap });
       setIndicators(ind);
@@ -259,7 +393,17 @@ export default function App() {
     }
   }, [coin]);
 
-  useEffect(() => { fetchMarket(); const i = setInterval(fetchMarket, 60000); return () => clearInterval(i); }, [fetchMarket]);
+  useEffect(() => {
+    fetchMarket();
+    fetchChart(coin.id, chartTF.days);
+    const i = setInterval(fetchMarket, 60000);
+    return () => clearInterval(i);
+  }, [fetchMarket, coin]);
+
+  useEffect(() => {
+    if (tab === "grafico") fetchChart(coin.id, chartTF.days);
+  }, [chartTF, tab]);
+
   useEffect(() => { if (loading) return; const i = setInterval(() => setCountdown(c => c > 0 ? c - 1 : 0), 1000); return () => clearInterval(i); }, [loading]);
 
   const handleAI = async () => {
@@ -279,14 +423,24 @@ export default function App() {
   const triggerHit = triggers.entry && marketData?.price <= parseFloat(triggers.entry);
   const tpHit = triggers.tp && marketData?.price >= parseFloat(triggers.tp);
   const slHit = triggers.sl && marketData?.price <= parseFloat(triggers.sl);
+
   const TABS = [
-    { id: "dashboard", label: "📊 Dashboard" }, { id: "bot", label: "🤖 Bot Config" },
-    { id: "triggers", label: "🎯 Trigger" }, { id: "advisor", label: "🧠 AI Advisor" },
-    { id: "history", label: "📋 Storico" },
+    { id: "dashboard", label: "📊 Dati" },
+    { id: "grafico", label: "📈 Grafico" },
+    { id: "bot", label: "🤖 Bot" },
+    { id: "triggers", label: "🎯 Trigger" },
+    { id: "advisor", label: "🧠 AI" },
+    { id: "history", label: "📋 Log" },
   ];
 
+  // Chart price domain
+  const priceMin = chartData.length ? Math.min(...chartData.map(d => d.low)) * 0.998 : 0;
+  const priceMax = chartData.length ? Math.max(...chartData.map(d => d.high)) * 1.002 : 1;
+  const visibleData = chartData;
+
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textPrimary, maxWidth: 520, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textPrimary, maxWidth: 600, margin: "0 auto" }}>
+      {/* HEADER */}
       <div style={{ background: C.panel, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -310,9 +464,9 @@ export default function App() {
         </div>
       </div>
 
-      {tpHit && <div style={{ background: C.greenDim, border: `1px solid ${C.green}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.green }}>🎯 TAKE PROFIT RAGGIUNTO! ${fmt(marketData.price)} ≥ ${triggers.tp}</div>}
-      {slHit && <div style={{ background: C.redDim, border: `1px solid ${C.red}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.red }}>🛑 STOP LOSS RAGGIUNTO! ${fmt(marketData.price)} ≤ ${triggers.sl}</div>}
-      {triggerHit && !slHit && <div style={{ background: C.accentDim, border: `1px solid ${C.accent}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.accent }}>🔔 TRIGGER ENTRATA! ${fmt(marketData.price)} ≤ ${triggers.entry}</div>}
+      {tpHit && <div style={{ background: C.greenDim, border: `1px solid ${C.green}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.green }}>🎯 TAKE PROFIT! ${fmt(marketData.price)}</div>}
+      {slHit && <div style={{ background: C.redDim, border: `1px solid ${C.red}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.red }}>🛑 STOP LOSS! ${fmt(marketData.price)}</div>}
+      {triggerHit && !slHit && <div style={{ background: C.accentDim, border: `1px solid ${C.accent}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.accent }}>🔔 ENTRY TRIGGER! ${fmt(marketData.price)}</div>}
 
       <div style={{ display: "flex", background: C.panel, borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
         {TABS.map(t => (
@@ -324,6 +478,8 @@ export default function App() {
       </div>
 
       <div style={{ padding: "12px 12px 80px" }}>
+
+        {/* ── DASHBOARD ── */}
         {tab === "dashboard" && (
           <>
             {loading && !marketData && <div style={{ textAlign: "center", padding: 40, color: C.accent }}>⏳ Analisi in corso...</div>}
@@ -346,12 +502,12 @@ export default function App() {
                     Mercato: {regimeLabel(signal.regime)}
                   </div>
                 </div>
-                {signal.gridAdvice && <Panel style={{ borderColor: C.accentDim }}><Label>Consiglio per il tuo Bot</Label><div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6 }}>{signal.gridAdvice}</div></Panel>}
+                {signal.gridAdvice && <Panel style={{ borderColor: C.accentDim }}><Label>Consiglio Bot</Label><div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6 }}>{signal.gridAdvice}</div></Panel>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
                   {[
                     { l: "RSI (14)", v: indicators?.rsi?.toFixed(1) ?? "-", c: indicators?.rsi < 35 ? C.green : indicators?.rsi > 70 ? C.red : C.yellow },
                     { l: "Fear & Greed", v: `${fearGreed ?? "-"}/100`, c: fgColor(fearGreed), s: fgLabel(fearGreed) },
-                    { l: "ATR (volatilità)", v: indicators?.atr ? `$${indicators.atr.toFixed(2)}` : "-", c: C.purple },
+                    { l: "ATR", v: indicators?.atr ? `$${indicators.atr.toFixed(2)}` : "-", c: C.purple },
                     { l: "Volume 24h", v: fmtB(marketData?.volume24h), c: C.accent },
                   ].map((item, i) => (
                     <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
@@ -372,7 +528,6 @@ export default function App() {
                   <StatRow label="MACD" value={indicators?.macd?.macd?.toFixed(3) ?? "-"} color={indicators?.macd?.macd > 0 ? C.green : C.red} />
                   <StatRow label="Supporto" value={`$${fmt(indicators?.sr?.support)}`} color={C.green} />
                   <StatRow label="Resistenza" value={`$${fmt(indicators?.sr?.resistance)}`} color={C.red} />
-                  <StatRow label="Midpoint S/R" value={`$${fmt(indicators?.sr?.midpoint)}`} color={C.yellow} />
                   <StatRow label="Min 24h" value={`$${fmt(marketData?.low24h)}`} color={C.red} />
                   <StatRow label="Max 24h" value={`$${fmt(marketData?.high24h)}`} color={C.green} />
                   <StatRow label="Market Cap" value={fmtB(marketData?.marketCap)} color={C.textSecondary} />
@@ -390,13 +545,144 @@ export default function App() {
                   {lastUpdate && <>Aggiornato {lastUpdate.toLocaleTimeString("it-IT")} · refresh in {countdown}s</>}
                 </div>
                 <div style={{ textAlign: "center", marginTop: 10 }}>
-                  <button onClick={fetchMarket} style={{ background: C.accentDim, border: `1px solid ${C.accent}`, borderRadius: 10, color: C.accent, padding: "10px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>🔄 Aggiorna ora</button>
+                  <button onClick={fetchMarket} style={{ background: C.accentDim, border: `1px solid ${C.accent}`, borderRadius: 10, color: C.accent, padding: "10px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>🔄 Aggiorna</button>
                 </div>
               </>
             )}
           </>
         )}
 
+        {/* ── GRAFICO ── */}
+        {tab === "grafico" && (
+          <>
+            {/* Timeframe selector */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {TIMEFRAMES.map(tf => (
+                <button key={tf.label} onClick={() => setChartTF(tf)}
+                  style={{ flex: 1, padding: "8px 0", fontSize: 13, fontWeight: 700, background: chartTF.label === tf.label ? C.accent : C.panel, color: chartTF.label === tf.label ? "#000" : C.textSecondary, border: `1px solid ${chartTF.label === tf.label ? C.accent : C.border}`, borderRadius: 8, cursor: "pointer" }}>
+                  {tf.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Toggle indicatori */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+              {[
+                { label: "EMA20", state: showEMA20, set: setShowEMA20, color: "#ffd600" },
+                { label: "EMA50", state: showEMA50, set: setShowEMA50, color: "#ff8c00" },
+                { label: "EMA200", state: showEMA200, set: setShowEMA200, color: "#b388ff" },
+                { label: "BB", state: showBB, set: setShowBB, color: "#00d4ff" },
+              ].map(item => (
+                <button key={item.label} onClick={() => item.set(!item.state)}
+                  style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, background: item.state ? `${item.color}22` : C.panel, color: item.state ? item.color : C.textDim, border: `1px solid ${item.state ? item.color : C.border}`, borderRadius: 6, cursor: "pointer" }}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {chartLoading && <div style={{ textAlign: "center", padding: 30, color: C.accent }}>⏳ Caricamento grafico...</div>}
+
+            {!chartLoading && chartData.length > 0 && (
+              <>
+                {/* GRAFICO PREZZO */}
+                <Panel style={{ padding: "12px 4px" }}>
+                  <div style={{ paddingLeft: 12 }}><Label>Prezzo + Indicatori — {coin.symbol}/USDT ({chartTF.label})</Label></div>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
+                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
+                      <YAxis domain={[priceMin, priceMax]} tick={{ fontSize: 9, fill: "#3a4a6b" }} width={55} tickFormatter={v => `$${v.toLocaleString("it-IT", { maximumFractionDigits: 0 })}`} />
+                      <Tooltip content={<CustomTooltipPrice />} />
+
+                      {/* Candele simulate con Bar */}
+                      <Bar dataKey="close" fill="#00e676" opacity={0} isAnimationActive={false} />
+
+                      {/* Linea prezzo close */}
+                      <Line type="monotone" dataKey="close" stroke="#00d4ff" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Prezzo" />
+
+                      {showBB && <Line type="monotone" dataKey="bbUpper" stroke="#00d4ff" strokeWidth={0.8} strokeDasharray="3 3" dot={false} isAnimationActive={false} name="BB Upper" />}
+                      {showBB && <Line type="monotone" dataKey="bbLower" stroke="#00d4ff" strokeWidth={0.8} strokeDasharray="3 3" dot={false} isAnimationActive={false} name="BB Lower" />}
+                      {showBB && <Line type="monotone" dataKey="bbMiddle" stroke="#00d4ff" strokeWidth={0.5} strokeDasharray="6 3" dot={false} isAnimationActive={false} name="BB Mid" />}
+                      {showEMA20 && <Line type="monotone" dataKey="ema20" stroke="#ffd600" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA20" />}
+                      {showEMA50 && <Line type="monotone" dataKey="ema50" stroke="#ff8c00" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA50" />}
+                      {showEMA200 && <Line type="monotone" dataKey="ema200" stroke="#b388ff" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA200" />}
+
+                      {indicators?.sr && <ReferenceLine y={indicators.sr.support} stroke="#00e676" strokeDasharray="4 4" strokeWidth={1} label={{ value: "SUP", fill: "#00e676", fontSize: 9 }} />}
+                      {indicators?.sr && <ReferenceLine y={indicators.sr.resistance} stroke="#ff3d5a" strokeDasharray="4 4" strokeWidth={1} label={{ value: "RES", fill: "#ff3d5a", fontSize: 9 }} />}
+                      {triggers.entry && <ReferenceLine y={parseFloat(triggers.entry)} stroke="#00d4ff" strokeDasharray="2 2" strokeWidth={1} label={{ value: "ENTRY", fill: "#00d4ff", fontSize: 9 }} />}
+                      {triggers.tp && <ReferenceLine y={parseFloat(triggers.tp)} stroke="#00e676" strokeDasharray="2 2" strokeWidth={1} label={{ value: "TP", fill: "#00e676", fontSize: 9 }} />}
+                      {triggers.sl && <ReferenceLine y={parseFloat(triggers.sl)} stroke="#ff3d5a" strokeDasharray="2 2" strokeWidth={1} label={{ value: "SL", fill: "#ff3d5a", fontSize: 9 }} />}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </Panel>
+
+                {/* RSI */}
+                <Panel style={{ padding: "12px 4px" }}>
+                  <div style={{ paddingLeft: 12 }}><Label>RSI (14) — Oversold &lt;30 | Overbought &gt;70</Label></div>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
+                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "#3a4a6b" }} width={30} />
+                      <Tooltip formatter={(v) => [v?.toFixed(1), "RSI"]} contentStyle={{ background: "#0b0e1a", border: "1px solid #1e2840", fontSize: 11 }} />
+                      <ReferenceLine y={70} stroke="#ff3d5a" strokeDasharray="3 3" strokeWidth={1} label={{ value: "70", fill: "#ff3d5a", fontSize: 9 }} />
+                      <ReferenceLine y={30} stroke="#00e676" strokeDasharray="3 3" strokeWidth={1} label={{ value: "30", fill: "#00e676", fontSize: 9 }} />
+                      <ReferenceLine y={50} stroke="#3a4a6b" strokeDasharray="2 4" strokeWidth={1} />
+                      <Line type="monotone" dataKey="rsi" stroke="#b388ff" strokeWidth={1.5} dot={false} isAnimationActive={false} name="RSI" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </Panel>
+
+                {/* MACD */}
+                <Panel style={{ padding: "12px 4px" }}>
+                  <div style={{ paddingLeft: 12 }}><Label>MACD — Istogramma + Signal Line</Label></div>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
+                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 9, fill: "#3a4a6b" }} width={40} />
+                      <Tooltip formatter={(v) => [v?.toFixed(4), ""]} contentStyle={{ background: "#0b0e1a", border: "1px solid #1e2840", fontSize: 11 }} />
+                      <ReferenceLine y={0} stroke="#3a4a6b" strokeWidth={1} />
+                      <Bar dataKey="macdHist" fill="#00d4ff" opacity={0.6} isAnimationActive={false} name="Hist"
+                        label={false}
+                        shape={(props) => {
+                          const { x, y, width, height, value } = props;
+                          return <rect x={x} y={value >= 0 ? y : y + height} width={width} height={Math.abs(height)} fill={value >= 0 ? "#00e676" : "#ff3d5a"} opacity={0.7} />;
+                        }}
+                      />
+                      <Line type="monotone" dataKey="macd" stroke="#00d4ff" strokeWidth={1.2} dot={false} isAnimationActive={false} name="MACD" />
+                      <Line type="monotone" dataKey="macdSignal" stroke="#ff8c00" strokeWidth={1.2} dot={false} isAnimationActive={false} name="Signal" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </Panel>
+
+                {/* Legenda */}
+                <Panel>
+                  <Label>Legenda Indicatori</Label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                    {[
+                      { color: "#00d4ff", label: "Prezzo (close)" },
+                      { color: "#ffd600", label: "EMA 20 (breve)" },
+                      { color: "#ff8c00", label: "EMA 50 (medio)" },
+                      { color: "#b388ff", label: "EMA 200 (lungo)" },
+                      { color: "#00d4ff", label: "Bollinger Bands", dashed: true },
+                      { color: "#00e676", label: "Supporto" },
+                      { color: "#ff3d5a", label: "Resistenza" },
+                      { color: "#b388ff", label: "RSI (pannello)" },
+                    ].map((item, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ width: 20, height: 2, background: item.color, borderTop: item.dashed ? `2px dashed ${item.color}` : "none", opacity: 0.9 }} />
+                        <span style={{ fontSize: 11, color: C.textSecondary }}>{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── BOT CONFIG ── */}
         {tab === "bot" && (
           <Panel>
             <Label>Configurazione Grid Bot</Label>
@@ -436,6 +722,7 @@ export default function App() {
           </Panel>
         )}
 
+        {/* ── TRIGGERS ── */}
         {tab === "triggers" && (
           <>
             <Panel>
@@ -485,11 +772,12 @@ export default function App() {
           </>
         )}
 
+        {/* ── AI ADVISOR ── */}
         {tab === "advisor" && (
           <>
             <Panel>
               <Label>🧠 Consigliere AI Personalizzato</Label>
-              <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.6, marginBottom: 14 }}>L'AI analizza indicatori tecnici, bot e trigger e ti dà un consiglio su misura come un trader esperto.</div>
+              <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.6, marginBottom: 14 }}>L'AI analizza tutto e ti dà un consiglio su misura come un trader esperto.</div>
               <button onClick={handleAI} disabled={aiLoading || !indicators} style={{ width: "100%", padding: "14px 0", fontSize: 16, fontWeight: 800, background: aiLoading ? C.bg : "linear-gradient(135deg, #6a00ff, #00d4ff)", color: aiLoading ? C.textDim : "#fff", border: `1px solid ${aiLoading ? C.border : "#6a00ff"}`, borderRadius: 12, cursor: aiLoading ? "not-allowed" : "pointer" }}>
                 {aiLoading ? "⏳ Analisi in corso..." : "🧠 Chiedi Consiglio all'AI"}
               </button>
@@ -504,14 +792,14 @@ export default function App() {
             <Panel>
               <Label>📋 Checklist del Trader Pro</Label>
               {[
-                { ok: indicators?.rsi < 50, t: "RSI sotto 50 (zona favorevole all'acquisto)" },
+                { ok: indicators?.rsi < 50, t: "RSI sotto 50 (zona favorevole)" },
                 { ok: indicators?.ema20 > indicators?.ema50, t: "EMA20 sopra EMA50 (trend positivo)" },
                 { ok: indicators?.price > indicators?.ema200, t: "Prezzo sopra EMA200 (mercato bull)" },
                 { ok: fearGreed < 50, t: "Fear & Greed sotto 50 (paura = opportunità)" },
                 { ok: signal?.regime === "laterale", t: "Mercato laterale (ideale per grid bot)" },
-                { ok: !!triggers.sl, t: "Stop Loss impostato (gestione rischio)" },
+                { ok: !!triggers.sl, t: "Stop Loss impostato" },
                 { ok: triggers.tp && triggers.sl && triggers.entry && ((parseFloat(triggers.tp) - parseFloat(triggers.entry)) / (parseFloat(triggers.entry) - parseFloat(triggers.sl))) >= 2, t: "Risk/Reward ≥ 1:2" },
-                { ok: botConfig.active && botConfig.priceMin && botConfig.priceMax, t: "Bot configurato con range definito" },
+                { ok: botConfig.active && botConfig.priceMin && botConfig.priceMax, t: "Bot configurato" },
               ].map((item, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
                   <span style={{ fontSize: 16 }}>{item.ok ? "✅" : "⬜"}</span>
@@ -522,11 +810,12 @@ export default function App() {
           </>
         )}
 
+        {/* ── STORICO ── */}
         {tab === "history" && (
           <Panel>
             <Label>Storico Segnali ({coin.symbol})</Label>
             {signalHistory.length === 0 ? (
-              <div style={{ color: C.textDim, fontSize: 13, textAlign: "center", padding: 20 }}>Nessun segnale ancora. Torna alla Dashboard.</div>
+              <div style={{ color: C.textDim, fontSize: 13, textAlign: "center", padding: 20 }}>Nessun segnale ancora.</div>
             ) : signalHistory.map((h, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
                 <div>
