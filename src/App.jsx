@@ -16,7 +16,7 @@ const COINS = [
   { id: "matic-network", symbol: "MATIC" }, { id: "chainlink", symbol: "LINK" },
 ];
 
-const PROXY = "https://corsproxy.io/?";
+const proxy = (url) => `/api/proxy?url=${encodeURIComponent(url)}`;
 
 function calcRSI(closes, period = 14) {
   if (closes.length < period + 1) return null;
@@ -89,7 +89,6 @@ function computeSignal(ind) {
   const { rsi, ema20, ema50, ema200, macd, bb, price, change24h, regime } = ind;
   let score = 0;
   const reasons = [];
-
   if (rsi !== null) {
     if (rsi < 30) { score += 3; reasons.push({ t: "RSI fortemente oversold", v: rsi.toFixed(1), good: true }); }
     else if (rsi < 45) { score += 1; reasons.push({ t: "RSI in zona bassa", v: rsi.toFixed(1), good: true }); }
@@ -135,30 +134,24 @@ function computeSignal(ind) {
 }
 
 async function getAIAdvice(indicators, botConfig, triggers, coinSymbol) {
-  const prompt = `Sei un advisor professionale di trading crypto. Analizza questa situazione e dai consigli pratici in italiano, come farebbe un trader esperto.
+  const prompt = `Sei un advisor professionale di trading crypto. Analizza questa situazione e dai consigli pratici in italiano.
 
 COIN: ${coinSymbol}/USDT
 PREZZO: $${indicators.price?.toFixed(2)}
 VARIAZIONE 24H: ${indicators.change24h?.toFixed(2)}%
-RSI (14): ${indicators.rsi?.toFixed(1)}
+RSI: ${indicators.rsi?.toFixed(1)}
 EMA20: $${indicators.ema20?.toFixed(2)}
 EMA50: $${indicators.ema50?.toFixed(2)}
 EMA200: $${indicators.ema200?.toFixed(2)}
 MACD: ${indicators.macd?.macd?.toFixed(2)}
-BOLLINGER: upper $${indicators.bb?.upper?.toFixed(2)}, lower $${indicators.bb?.lower?.toFixed(2)}
+BB upper: $${indicators.bb?.upper?.toFixed(2)}, lower: $${indicators.bb?.lower?.toFixed(2)}
 ATR: $${indicators.atr?.toFixed(2)}
 REGIME: ${indicators.regime}
 FEAR & GREED: ${indicators.fearGreed ?? "N/D"}/100
 SUPPORTO: $${indicators.sr?.support?.toFixed(2)}
 RESISTENZA: $${indicators.sr?.resistance?.toFixed(2)}
-
-${botConfig.active ? `BOT GRID UTENTE:
-- Tipo: ${botConfig.type}
-- Range: $${botConfig.priceMin} - $${botConfig.priceMax}
-- Griglie: ${botConfig.gridCount}
-- Capitale: $${botConfig.capital}` : "Nessun bot configurato."}
-
-${triggers.entry ? `TRIGGER ENTRATA: $${triggers.entry}` : ""}
+${botConfig.active ? `BOT GRID: tipo ${botConfig.type}, range $${botConfig.priceMin}-$${botConfig.priceMax}, ${botConfig.gridCount} griglie, capitale $${botConfig.capital}` : "Nessun bot configurato."}
+${triggers.entry ? `ENTRY TRIGGER: $${triggers.entry}` : ""}
 ${triggers.tp ? `TAKE PROFIT: $${triggers.tp}` : ""}
 ${triggers.sl ? `STOP LOSS: $${triggers.sl}` : ""}
 
@@ -167,26 +160,19 @@ Rispondi con:
 2. COSA FARE ORA (consiglio diretto)
 3. RISCHI DA MONITORARE (2 punti)
 4. LIVELLI CHIAVE suggeriti
-
-Sii diretto, professionale, usa numeri precisi. Max 250 parole.`;
+Max 250 parole. Sii diretto e usa numeri precisi.`;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }]
-    })
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
   });
   const data = await response.json();
   return data.content?.[0]?.text ?? "Analisi non disponibile.";
 }
 
 const Panel = ({ children, style = {} }) => (
-  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 12, ...style }}>
-    {children}
-  </div>
+  <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 12, ...style }}>{children}</div>
 );
 const Label = ({ children }) => (
   <div style={{ fontSize: 10, color: C.textDim, letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>{children}</div>
@@ -232,17 +218,14 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const cgBase = `https://api.coingecko.com/api/v3`;
       const [priceRes, ohlcRes, fgRes] = await Promise.all([
-        fetch(`${PROXY}${encodeURIComponent(`${cgBase}/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false`)}`),
-        fetch(`${PROXY}${encodeURIComponent(`${cgBase}/coins/${coin.id}/ohlc?vs_currency=usd&days=30`)}`),
-        fetch(`${PROXY}${encodeURIComponent("https://api.alternative.me/fng/?limit=1")}`),
+        fetch(proxy(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false`)),
+        fetch(proxy(`https://api.coingecko.com/api/v3/coins/${coin.id}/ohlc?vs_currency=usd&days=30`)),
+        fetch(proxy("https://api.alternative.me/fng/?limit=1")),
       ]);
-
       const priceData = await priceRes.json();
       const ohlcData = await ohlcRes.json();
       const fgData = await fgRes.json();
-
       const closes = ohlcData.map(c => c[4]);
       const price = priceData.market_data.current_price.usd;
       const change24h = priceData.market_data.price_change_percentage_24h;
@@ -251,7 +234,6 @@ export default function App() {
       const low24h = priceData.market_data.low_24h.usd;
       const marketCap = priceData.market_data.market_cap.usd;
       const fg = parseInt(fgData.data?.[0]?.value ?? "50");
-
       const rsi = calcRSI(closes);
       const ema20 = calcEMA(closes, 20);
       const ema50 = calcEMA(closes, 50);
@@ -261,10 +243,8 @@ export default function App() {
       const atr = calcATR(ohlcData);
       const sr = calcSR(closes);
       const regime = detectRegime(closes, atr, price);
-
       const ind = { price, change24h, volume24h, high24h, low24h, marketCap, rsi, ema20, ema50, ema200, macd, bb, atr, sr, regime, fearGreed: fg };
       const sig = computeSignal(ind);
-
       setMarketData({ price, change24h, volume24h, high24h, low24h, marketCap });
       setIndicators(ind);
       setSignal(sig);
@@ -296,11 +276,9 @@ export default function App() {
   const fgLabel = fg => fg < 25 ? "Paura Estrema" : fg < 45 ? "Paura" : fg < 55 ? "Neutro" : fg < 75 ? "Greed" : "Greed Estremo";
   const regimeColor = r => ({ laterale: C.accent, trend_rialzista: C.green, trend_ribassista: C.red, volatile: C.yellow })[r] || C.textSecondary;
   const regimeLabel = r => ({ laterale: "LATERALE", trend_rialzista: "TREND ↑", trend_ribassista: "TREND ↓", volatile: "VOLATILE" })[r] || r;
-
   const triggerHit = triggers.entry && marketData?.price <= parseFloat(triggers.entry);
   const tpHit = triggers.tp && marketData?.price >= parseFloat(triggers.tp);
   const slHit = triggers.sl && marketData?.price <= parseFloat(triggers.sl);
-
   const TABS = [
     { id: "dashboard", label: "📊 Dashboard" }, { id: "bot", label: "🤖 Bot Config" },
     { id: "triggers", label: "🎯 Trigger" }, { id: "advisor", label: "🧠 AI Advisor" },
@@ -309,8 +287,6 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textPrimary, maxWidth: 520, margin: "0 auto" }}>
-
-      {/* HEADER */}
       <div style={{ background: C.panel, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -320,9 +296,7 @@ export default function App() {
           {marketData && (
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 22, fontWeight: 800 }}>${fmt(marketData.price)}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: marketData.change24h >= 0 ? C.green : C.red }}>
-                {marketData.change24h >= 0 ? "+" : ""}{marketData.change24h?.toFixed(2)}%
-              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: marketData.change24h >= 0 ? C.green : C.red }}>{marketData.change24h >= 0 ? "+" : ""}{marketData.change24h?.toFixed(2)}%</div>
             </div>
           )}
         </div>
@@ -336,12 +310,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* ALERT TRIGGERS */}
       {tpHit && <div style={{ background: C.greenDim, border: `1px solid ${C.green}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.green }}>🎯 TAKE PROFIT RAGGIUNTO! ${fmt(marketData.price)} ≥ ${triggers.tp}</div>}
       {slHit && <div style={{ background: C.redDim, border: `1px solid ${C.red}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.red }}>🛑 STOP LOSS RAGGIUNTO! ${fmt(marketData.price)} ≤ ${triggers.sl}</div>}
       {triggerHit && !slHit && <div style={{ background: C.accentDim, border: `1px solid ${C.accent}`, margin: "8px 12px 0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: C.accent }}>🔔 TRIGGER ENTRATA! ${fmt(marketData.price)} ≤ ${triggers.entry}</div>}
 
-      {/* TABS */}
       <div style={{ display: "flex", background: C.panel, borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -352,8 +324,6 @@ export default function App() {
       </div>
 
       <div style={{ padding: "12px 12px 80px" }}>
-
-        {/* DASHBOARD */}
         {tab === "dashboard" && (
           <>
             {loading && !marketData && <div style={{ textAlign: "center", padding: 40, color: C.accent }}>⏳ Analisi in corso...</div>}
@@ -376,14 +346,7 @@ export default function App() {
                     Mercato: {regimeLabel(signal.regime)}
                   </div>
                 </div>
-
-                {signal.gridAdvice && (
-                  <Panel style={{ borderColor: C.accentDim }}>
-                    <Label>Consiglio per il tuo Bot</Label>
-                    <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6 }}>{signal.gridAdvice}</div>
-                  </Panel>
-                )}
-
+                {signal.gridAdvice && <Panel style={{ borderColor: C.accentDim }}><Label>Consiglio per il tuo Bot</Label><div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6 }}>{signal.gridAdvice}</div></Panel>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
                   {[
                     { l: "RSI (14)", v: indicators?.rsi?.toFixed(1) ?? "-", c: indicators?.rsi < 35 ? C.green : indicators?.rsi > 70 ? C.red : C.yellow },
@@ -398,7 +361,6 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-
                 <Panel>
                   <Label>Indicatori Tecnici</Label>
                   <StatRow label="EMA 20" value={`$${fmt(indicators?.ema20)}`} color={indicators?.price > indicators?.ema20 ? C.green : C.red} sub={indicators?.price > indicators?.ema20 ? "Prezzo sopra" : "Prezzo sotto"} />
@@ -415,19 +377,15 @@ export default function App() {
                   <StatRow label="Max 24h" value={`$${fmt(marketData?.high24h)}`} color={C.green} />
                   <StatRow label="Market Cap" value={fmtB(marketData?.marketCap)} color={C.textSecondary} />
                 </Panel>
-
                 <Panel>
                   <Label>Analisi Segnale</Label>
                   {signal.reasons.map((r, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < signal.reasons.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                      <span style={{ fontSize: 12, color: r.good === true ? C.green : r.good === false ? C.red : C.textSecondary }}>
-                        {r.good === true ? "▲" : r.good === false ? "▼" : "●"} {r.t}
-                      </span>
+                      <span style={{ fontSize: 12, color: r.good === true ? C.green : r.good === false ? C.red : C.textSecondary }}>{r.good === true ? "▲" : r.good === false ? "▼" : "●"} {r.t}</span>
                       <span style={{ fontSize: 12, fontWeight: 700, color: r.good === true ? C.green : r.good === false ? C.red : C.yellow }}>{r.v}</span>
                     </div>
                   ))}
                 </Panel>
-
                 <div style={{ textAlign: "center", fontSize: 11, color: C.textDim, marginTop: 4 }}>
                   {lastUpdate && <>Aggiornato {lastUpdate.toLocaleTimeString("it-IT")} · refresh in {countdown}s</>}
                 </div>
@@ -439,7 +397,6 @@ export default function App() {
           </>
         )}
 
-        {/* BOT CONFIG */}
         {tab === "bot" && (
           <Panel>
             <Label>Configurazione Grid Bot</Label>
@@ -479,7 +436,6 @@ export default function App() {
           </Panel>
         )}
 
-        {/* TRIGGERS */}
         {tab === "triggers" && (
           <>
             <Panel>
@@ -512,9 +468,9 @@ export default function App() {
             })()}
             {indicators?.sr && (
               <Panel>
-                <Label>💡 Livelli Suggeriti dall'Analisi</Label>
+                <Label>💡 Livelli Suggeriti</Label>
                 {[
-                  { l: "Entry suggerito (vicino supporto)", v: `$${fmt(indicators.sr.support * 1.01)}`, c: C.green },
+                  { l: "Entry suggerito", v: `$${fmt(indicators.sr.support * 1.01)}`, c: C.green },
                   { l: "Take Profit suggerito", v: `$${fmt(indicators.sr.resistance * 0.98)}`, c: C.green },
                   { l: "Stop Loss suggerito", v: `$${fmt(indicators.sr.support * 0.96)}`, c: C.red },
                   { l: "Midpoint neutro", v: `$${fmt(indicators.sr.midpoint)}`, c: C.yellow },
@@ -529,14 +485,11 @@ export default function App() {
           </>
         )}
 
-        {/* AI ADVISOR */}
         {tab === "advisor" && (
           <>
             <Panel>
               <Label>🧠 Consigliere AI Personalizzato</Label>
-              <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.6, marginBottom: 14 }}>
-                L'AI analizza indicatori tecnici, configurazione bot e trigger impostati e ti dà un consiglio su misura come un trader esperto.
-              </div>
+              <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.6, marginBottom: 14 }}>L'AI analizza indicatori tecnici, bot e trigger e ti dà un consiglio su misura come un trader esperto.</div>
               <button onClick={handleAI} disabled={aiLoading || !indicators} style={{ width: "100%", padding: "14px 0", fontSize: 16, fontWeight: 800, background: aiLoading ? C.bg : "linear-gradient(135deg, #6a00ff, #00d4ff)", color: aiLoading ? C.textDim : "#fff", border: `1px solid ${aiLoading ? C.border : "#6a00ff"}`, borderRadius: 12, cursor: aiLoading ? "not-allowed" : "pointer" }}>
                 {aiLoading ? "⏳ Analisi in corso..." : "🧠 Chiedi Consiglio all'AI"}
               </button>
@@ -569,7 +522,6 @@ export default function App() {
           </>
         )}
 
-        {/* STORICO */}
         {tab === "history" && (
           <Panel>
             <Label>Storico Segnali ({coin.symbol})</Label>
