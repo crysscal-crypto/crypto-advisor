@@ -255,6 +255,124 @@ const CustomTooltipPrice = ({ active, payload, label }) => {
   );
 };
 
+function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger }) {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container || !data.length) return;
+    canvas.width = container.clientWidth;
+    canvas.height = 280;
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width, H = canvas.height;
+    const padL = 58, padR = 8, padT = 10, padB = 22;
+    const chartW = W - padL - padR, chartH = H - padT - padB;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0b0e1a";
+    ctx.fillRect(0, 0, W, H);
+
+    const highs = data.map(d => d.high ?? d.close);
+    const lows = data.map(d => d.low ?? d.close);
+    const bbUppers = data.map(d => d.bbUpper).filter(Boolean);
+    const bbLowers = data.map(d => d.bbLower).filter(Boolean);
+
+    let priceMin = Math.min(...lows, ...bbLowers) * 0.999;
+    let priceMax = Math.max(...highs, ...bbUppers) * 1.001;
+    if (support) priceMin = Math.min(priceMin, support * 0.998);
+    if (resistance) priceMax = Math.max(priceMax, resistance * 1.002);
+    const priceRange = priceMax - priceMin || 1;
+
+    const xPos = (i) => padL + (i + 0.5) * (chartW / data.length);
+    const yP = (p) => padT + chartH - ((p - priceMin) / priceRange) * chartH;
+    const cw = Math.max(1.5, chartW / data.length - 1.5);
+
+    // Grid
+    ctx.strokeStyle = "#141929"; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 5; i++) {
+      const y = padT + (chartH / 5) * i;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      const price = priceMax - (priceRange / 5) * i;
+      ctx.fillStyle = "#3a4a6b"; ctx.font = "9px monospace"; ctx.textAlign = "right";
+      ctx.fillText("$" + (price > 999 ? price.toFixed(0) : price.toFixed(2)), padL - 2, y + 3);
+    }
+
+    // BB Fill
+    if (showBB) {
+      ctx.beginPath();
+      data.forEach((d, i) => { if (d.bbUpper) { i === 0 ? ctx.moveTo(xPos(i), yP(d.bbUpper)) : ctx.lineTo(xPos(i), yP(d.bbUpper)); }});
+      data.slice().reverse().forEach((d, i) => { if (d.bbLower) ctx.lineTo(xPos(data.length - 1 - i), yP(d.bbLower)); });
+      ctx.closePath(); ctx.fillStyle = "#00d4ff08"; ctx.fill();
+      ["bbUpper", "bbMiddle", "bbLower"].forEach(key => {
+        ctx.strokeStyle = "#00d4ff35"; ctx.lineWidth = 0.8; ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        data.forEach((d, i) => { if (!d[key]) return; i === 0 ? ctx.moveTo(xPos(i), yP(d[key])) : ctx.lineTo(xPos(i), yP(d[key])); });
+        ctx.stroke(); ctx.setLineDash([]);
+      });
+    }
+
+    // EMA lines
+    if (showEMA20) { ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema20) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema20)) : ctx.lineTo(xPos(i), yP(d.ema20)); }); ctx.stroke(); }
+    if (showEMA50) { ctx.strokeStyle = "#ff8c00"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema50) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema50)) : ctx.lineTo(xPos(i), yP(d.ema50)); }); ctx.stroke(); }
+    if (showEMA200) { ctx.strokeStyle = "#b388ff"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema200) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema200)) : ctx.lineTo(xPos(i), yP(d.ema200)); }); ctx.stroke(); }
+
+    // Linee orizzontali
+    const hLines = [
+      { v: support, c: "#00e676", label: "SUP" },
+      { v: resistance, c: "#ff3d5a", label: "RES" },
+      { v: entryTrigger, c: "#00d4ff", label: "ENTRY" },
+      { v: tpTrigger, c: "#00e676", label: "TP" },
+      { v: slTrigger, c: "#ff3d5a", label: "SL" },
+    ];
+    hLines.forEach(({ v, c, label }) => {
+      if (!v) return;
+      ctx.strokeStyle = c + "80"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(padL, yP(v)); ctx.lineTo(W - padR, yP(v)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = c; ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
+      ctx.fillText(label, padL + 4, yP(v) - 2);
+    });
+
+    // CANDELE
+    data.forEach((d, i) => {
+      const open = d.open ?? d.close;
+      const high = d.high ?? d.close;
+      const low = d.low ?? d.close;
+      const close = d.close;
+      const isGreen = close >= open;
+      const color = isGreen ? "#00e676" : "#ff3d5a";
+      const x = xPos(i);
+
+      // Stoppino
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, yP(high)); ctx.lineTo(x, yP(low)); ctx.stroke();
+
+      // Corpo
+      const bodyTop = yP(Math.max(open, close));
+      const bodyBot = yP(Math.min(open, close));
+      const bodyH = Math.max(1, bodyBot - bodyTop);
+      ctx.fillStyle = isGreen ? "#00e676cc" : "#ff3d5acc";
+      ctx.fillRect(x - cw / 2, bodyTop, cw, bodyH);
+      ctx.strokeStyle = color; ctx.lineWidth = 0.5;
+      ctx.strokeRect(x - cw / 2, bodyTop, cw, bodyH);
+    });
+
+    // Date labels
+    ctx.fillStyle = "#3a4a6b"; ctx.font = "8px monospace"; ctx.textAlign = "center";
+    const step = Math.max(1, Math.floor(data.length / 6));
+    data.forEach((d, i) => { if (i % step === 0) ctx.fillText(d.time, xPos(i), H - 5); });
+
+  }, [data, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger]);
+
+  return (
+    <div ref={containerRef} style={{ width: "100%" }}>
+      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: 280 }} />
+    </div>
+  );
+}
+
 const Panel = ({ children, style = {} }) => (
   <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 12, ...style }}>{children}</div>
 );
@@ -584,36 +702,17 @@ export default function App() {
 
             {!chartLoading && chartData.length > 0 && (
               <>
-                {/* GRAFICO PREZZO */}
-                <Panel style={{ padding: "12px 4px" }}>
-                  <div style={{ paddingLeft: 12 }}><Label>Prezzo + Indicatori — {coin.symbol}/USDT ({chartTF.label})</Label></div>
-                  <ResponsiveContainer width="100%" height={280}>
-                    <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
-                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
-                      <YAxis domain={[priceMin, priceMax]} tick={{ fontSize: 9, fill: "#3a4a6b" }} width={55} tickFormatter={v => `$${v.toLocaleString("it-IT", { maximumFractionDigits: 0 })}`} />
-                      <Tooltip content={<CustomTooltipPrice />} />
-
-                      {/* Candele simulate con Bar */}
-                      <Bar dataKey="close" fill="#00e676" opacity={0} isAnimationActive={false} />
-
-                      {/* Linea prezzo close */}
-                      <Line type="monotone" dataKey="close" stroke="#00d4ff" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Prezzo" />
-
-                      {showBB && <Line type="monotone" dataKey="bbUpper" stroke="#00d4ff" strokeWidth={0.8} strokeDasharray="3 3" dot={false} isAnimationActive={false} name="BB Upper" />}
-                      {showBB && <Line type="monotone" dataKey="bbLower" stroke="#00d4ff" strokeWidth={0.8} strokeDasharray="3 3" dot={false} isAnimationActive={false} name="BB Lower" />}
-                      {showBB && <Line type="monotone" dataKey="bbMiddle" stroke="#00d4ff" strokeWidth={0.5} strokeDasharray="6 3" dot={false} isAnimationActive={false} name="BB Mid" />}
-                      {showEMA20 && <Line type="monotone" dataKey="ema20" stroke="#ffd600" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA20" />}
-                      {showEMA50 && <Line type="monotone" dataKey="ema50" stroke="#ff8c00" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA50" />}
-                      {showEMA200 && <Line type="monotone" dataKey="ema200" stroke="#b388ff" strokeWidth={1.2} dot={false} isAnimationActive={false} name="EMA200" />}
-
-                      {indicators?.sr && <ReferenceLine y={indicators.sr.support} stroke="#00e676" strokeDasharray="4 4" strokeWidth={1} label={{ value: "SUP", fill: "#00e676", fontSize: 9 }} />}
-                      {indicators?.sr && <ReferenceLine y={indicators.sr.resistance} stroke="#ff3d5a" strokeDasharray="4 4" strokeWidth={1} label={{ value: "RES", fill: "#ff3d5a", fontSize: 9 }} />}
-                      {triggers.entry && <ReferenceLine y={parseFloat(triggers.entry)} stroke="#00d4ff" strokeDasharray="2 2" strokeWidth={1} label={{ value: "ENTRY", fill: "#00d4ff", fontSize: 9 }} />}
-                      {triggers.tp && <ReferenceLine y={parseFloat(triggers.tp)} stroke="#00e676" strokeDasharray="2 2" strokeWidth={1} label={{ value: "TP", fill: "#00e676", fontSize: 9 }} />}
-                      {triggers.sl && <ReferenceLine y={parseFloat(triggers.sl)} stroke="#ff3d5a" strokeDasharray="2 2" strokeWidth={1} label={{ value: "SL", fill: "#ff3d5a", fontSize: 9 }} />}
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                {/* GRAFICO CANDELE CANVAS */}
+                <Panel style={{ padding: "12px 8px" }}>
+                  <div style={{ paddingLeft: 4 }}><Label>Candele + Indicatori — {coin.symbol}/USDT ({chartTF.label})</Label></div>
+                  <CandleCanvas
+                    data={visibleData}
+                    showEMA20={showEMA20} showEMA50={showEMA50} showEMA200={showEMA200} showBB={showBB}
+                    support={indicators?.sr?.support} resistance={indicators?.sr?.resistance}
+                    entryTrigger={triggers.entry ? parseFloat(triggers.entry) : null}
+                    tpTrigger={triggers.tp ? parseFloat(triggers.tp) : null}
+                    slTrigger={triggers.sl ? parseFloat(triggers.sl) : null}
+                  />
                 </Panel>
 
                 {/* RSI */}
@@ -656,26 +755,47 @@ export default function App() {
                   </ResponsiveContainer>
                 </Panel>
 
-                {/* Legenda */}
+                {/* Legenda + Guida */}
                 <Panel>
                   <Label>Legenda Indicatori</Label>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
                     {[
-                      { color: "#00d4ff", label: "Prezzo (close)" },
+                      { color: "#00e676", label: "Candela verde (rialzo)" },
+                      { color: "#ff3d5a", label: "Candela rossa (ribasso)" },
                       { color: "#ffd600", label: "EMA 20 (breve)" },
                       { color: "#ff8c00", label: "EMA 50 (medio)" },
                       { color: "#b388ff", label: "EMA 200 (lungo)" },
-                      { color: "#00d4ff", label: "Bollinger Bands", dashed: true },
-                      { color: "#00e676", label: "Supporto" },
-                      { color: "#ff3d5a", label: "Resistenza" },
-                      { color: "#b388ff", label: "RSI (pannello)" },
+                      { color: "#00d4ff", label: "Bollinger Bands" },
+                      { color: "#00e676", label: "Supporto (SUP)" },
+                      { color: "#ff3d5a", label: "Resistenza (RES)" },
                     ].map((item, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 20, height: 2, background: item.color, borderTop: item.dashed ? `2px dashed ${item.color}` : "none", opacity: 0.9 }} />
+                        <div style={{ width: 20, height: 3, background: item.color, borderRadius: 2, flexShrink: 0 }} />
                         <span style={{ fontSize: 11, color: C.textSecondary }}>{item.label}</span>
                       </div>
                     ))}
                   </div>
+                </Panel>
+
+                {/* GUIDA COMPLETA */}
+                <Panel style={{ borderColor: C.accentDim }}>
+                  <Label>📖 Guida — Come Leggere il Grafico</Label>
+                  {[
+                    { emoji: "🕯️", titolo: "Candele Giapponesi", testo: "Ogni candela rappresenta un periodo. VERDE = il prezzo è salito (apertura → chiusura). ROSSA = il prezzo è sceso. Il corpo largo è il movimento principale. Le linee sottili (stoppini) sono i massimi e minimi del periodo." },
+                    { emoji: "📊", titolo: "EMA 20 (gialla) — Breve termine", testo: "Media mobile delle ultime 20 candele. Segue il prezzo da vicino. Se il prezzo è SOPRA l'EMA20 → momentum positivo. Se è SOTTO → debolezza." },
+                    { emoji: "🟠", titolo: "EMA 50 (arancio) — Medio termine", testo: "Trend delle ultime 50 candele. Quando EMA20 SUPERA EMA50 = Golden Cross → segnale rialzista. Quando EMA20 SCENDE sotto EMA50 = Death Cross → segnale ribassista." },
+                    { emoji: "🟣", titolo: "EMA 200 (viola) — Lungo termine", testo: "La più importante. Se il prezzo è SOPRA l'EMA200 siamo in mercato BULL. Se è SOTTO siamo in mercato BEAR. I grandi investitori usano questa linea come riferimento principale." },
+                    { emoji: "💠", titolo: "Bollinger Bands (azzurre tratteg.)", testo: "Tre linee che formano un canale di volatilità. Quando il prezzo tocca la banda INFERIORE → possibile rimbalzo (zona di acquisto). Quando tocca quella SUPERIORE → possibile inversione (zona di vendita). Bande strette = bassa volatilità, esplosione in arrivo." },
+                    { emoji: "🟢", titolo: "Supporto (SUP — verde tratteggiato)", testo: "Livello di prezzo dove storicamente gli acquirenti intervengono. Se il prezzo ci torna, spesso rimbalza. Rompere il supporto verso il basso è un segnale negativo." },
+                    { emoji: "🔴", titolo: "Resistenza (RES — rossa tratteggiata)", testo: "Livello dove i venditori storicamente intervengono. Il prezzo fa fatica a superarla. Se la rompe verso l'alto → forte segnale rialzista." },
+                    { emoji: "📈", titolo: "RSI (pannello viola sotto)", testo: "Oscilla tra 0 e 100. SOTTO 30 = oversold (ipervenduto) → possibile rimbalzo, zona di acquisto. SOPRA 70 = overbought (ipercomprato) → possibile correzione. La linea 50 è il confine bull/bear." },
+                    { emoji: "📉", titolo: "MACD (pannello sotto)", testo: "Mostra la forza del trend. Barre VERDI sopra lo zero = momentum rialzista. Barre ROSSE sotto zero = momentum ribassista. Quando la linea azzurra (MACD) supera quella arancio (Signal) → segnale di acquisto." },
+                  ].map((item, i) => (
+                    <div key={i} style={{ padding: "10px 0", borderBottom: i < 8 ? `1px solid ${C.border}` : "none" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, marginBottom: 4 }}>{item.emoji} {item.titolo}</div>
+                      <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.6 }}>{item.testo}</div>
+                    </div>
+                  ))}
                 </Panel>
               </>
             )}
