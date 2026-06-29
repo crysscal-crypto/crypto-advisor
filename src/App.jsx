@@ -322,8 +322,8 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
       const y = padT + (chartH / 5) * i;
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       const price = priceMax - (priceRange / 5) * i;
-      ctx.fillStyle = "#3a4a6b"; ctx.font = "9px monospace"; ctx.textAlign = "right";
-      ctx.fillText("$" + (price > 999 ? price.toFixed(0) : price.toFixed(2)), padL - 2, y + 3);
+      ctx.fillStyle = "#b0bec5"; ctx.font = "bold 11px monospace"; ctx.textAlign = "right";
+      ctx.fillText("$" + (price > 999 ? price.toFixed(0) : price.toFixed(2)), padL - 3, y + 4);
     }
 
     // BB Fill
@@ -375,13 +375,28 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     });
 
     // Date
-    ctx.fillStyle = "#3a4a6b"; ctx.font = "8px monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = "#b0bec5"; ctx.font = "bold 10px monospace"; ctx.textAlign = "center";
     const step = Math.max(1, Math.floor(visible.length / 6));
     visible.forEach((d, i) => { if (i % step === 0) ctx.fillText(d.time, xPos(i), H - 5); });
 
+    // Prezzo attuale
+    const currentClose = visible[visible.length - 1]?.close;
+    if (currentClose) {
+      const y = yP(currentClose);
+      ctx.strokeStyle = "#00d4ff"; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.setLineDash([]);
+      // Box prezzo
+      const label = "$" + (currentClose > 999 ? currentClose.toFixed(0) : currentClose.toFixed(2));
+      ctx.fillStyle = "#00d4ff";
+      ctx.fillRect(W - padR - 68, y - 9, 68, 16);
+      ctx.fillStyle = "#000"; ctx.font = "bold 11px monospace"; ctx.textAlign = "right";
+      ctx.fillText(label, W - padR - 2, y + 4);
+    }
+
     // Info candele visibili
-    ctx.fillStyle = "#3a4a6b"; ctx.font = "8px monospace"; ctx.textAlign = "right";
-    ctx.fillText(`${visible.length} candele`, W - padR, padT + 10);
+    ctx.fillStyle = "#546e7a"; ctx.font = "10px monospace"; ctx.textAlign = "right";
+    ctx.fillText(`${visible.length} candele`, W - padR - 72, padT + 12);
   }, [data, viewStart, viewCount, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger]);
 
   useEffect(() => { drawChart(); }, [drawChart]);
@@ -794,8 +809,8 @@ export default function App() {
                   <ResponsiveContainer width="100%" height={120}>
                     <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
-                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
-                      <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "#3a4a6b" }} width={30} />
+                      <XAxis dataKey="time" tick={{ fontSize: 10, fill: "#b0bec5", fontWeight: 600 }} interval="preserveStartEnd" />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "#b0bec5", fontWeight: 600 }} width={30} />
                       <Tooltip formatter={(v) => [v?.toFixed(1), "RSI"]} contentStyle={{ background: "#0b0e1a", border: "1px solid #1e2840", fontSize: 11 }} />
                       <ReferenceLine y={70} stroke="#ff3d5a" strokeDasharray="3 3" strokeWidth={1} label={{ value: "70", fill: "#ff3d5a", fontSize: 9 }} />
                       <ReferenceLine y={30} stroke="#00e676" strokeDasharray="3 3" strokeWidth={1} label={{ value: "30", fill: "#00e676", fontSize: 9 }} />
@@ -811,8 +826,8 @@ export default function App() {
                   <ResponsiveContainer width="100%" height={120}>
                     <ComposedChart data={visibleData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#141929" />
-                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#3a4a6b" }} interval="preserveStartEnd" />
-                      <YAxis tick={{ fontSize: 9, fill: "#3a4a6b" }} width={40} />
+                      <XAxis dataKey="time" tick={{ fontSize: 10, fill: "#b0bec5", fontWeight: 600 }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 10, fill: "#b0bec5", fontWeight: 600 }} width={40} />
                       <Tooltip formatter={(v) => [v?.toFixed(4), ""]} contentStyle={{ background: "#0b0e1a", border: "1px solid #1e2840", fontSize: 11 }} />
                       <ReferenceLine y={0} stroke="#3a4a6b" strokeWidth={1} />
                       <Bar dataKey="macdHist" fill="#00d4ff" opacity={0.6} isAnimationActive={false} name="Hist"
