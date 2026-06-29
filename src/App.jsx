@@ -258,8 +258,30 @@ const CustomTooltipPrice = ({ active, payload, label }) => {
 function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const [viewStart, setViewStart] = useState(0);
+  const [viewCount, setViewCount] = useState(null);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartView = useRef(0);
 
-  useEffect(() => {
+  const getCount = () => viewCount ?? data.length;
+  const getStart = () => Math.max(0, Math.min(data.length - getCount(), viewStart));
+
+  const zoomIn = () => {
+    const newCount = Math.max(10, Math.floor(getCount() * 0.6));
+    const center = getStart() + Math.floor(getCount() / 2);
+    setViewCount(newCount);
+    setViewStart(Math.max(0, center - Math.floor(newCount / 2)));
+  };
+  const zoomOut = () => {
+    const newCount = Math.min(data.length, Math.floor(getCount() * 1.6));
+    setViewCount(newCount);
+  };
+  const panLeft = () => setViewStart(s => Math.max(0, s - Math.floor(getCount() * 0.3)));
+  const panRight = () => setViewStart(s => Math.min(data.length - getCount(), s + Math.floor(getCount() * 0.3)));
+  const reset = () => { setViewCount(null); setViewStart(0); };
+
+  const drawChart = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container || !data.length) return;
@@ -270,24 +292,29 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     const padL = 58, padR = 8, padT = 10, padB = 22;
     const chartW = W - padL - padR, chartH = H - padT - padB;
 
+    const start = getStart();
+    const count = getCount();
+    const visible = data.slice(start, start + count);
+    if (!visible.length) return;
+
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#0b0e1a";
     ctx.fillRect(0, 0, W, H);
 
-    const highs = data.map(d => d.high ?? d.close);
-    const lows = data.map(d => d.low ?? d.close);
-    const bbUppers = data.map(d => d.bbUpper).filter(Boolean);
-    const bbLowers = data.map(d => d.bbLower).filter(Boolean);
+    const highs = visible.map(d => d.high ?? d.close);
+    const lows = visible.map(d => d.low ?? d.close);
+    const bbUppers = visible.map(d => d.bbUpper).filter(Boolean);
+    const bbLowers = visible.map(d => d.bbLower).filter(Boolean);
 
-    let priceMin = Math.min(...lows, ...bbLowers) * 0.999;
-    let priceMax = Math.max(...highs, ...bbUppers) * 1.001;
+    let priceMin = Math.min(...lows, ...(bbLowers.length ? bbLowers : [Infinity])) * 0.999;
+    let priceMax = Math.max(...highs, ...(bbUppers.length ? bbUppers : [-Infinity])) * 1.001;
     if (support) priceMin = Math.min(priceMin, support * 0.998);
     if (resistance) priceMax = Math.max(priceMax, resistance * 1.002);
     const priceRange = priceMax - priceMin || 1;
 
-    const xPos = (i) => padL + (i + 0.5) * (chartW / data.length);
+    const xPos = (i) => padL + (i + 0.5) * (chartW / visible.length);
     const yP = (p) => padT + chartH - ((p - priceMin) / priceRange) * chartH;
-    const cw = Math.max(1.5, chartW / data.length - 1.5);
+    const cw = Math.max(1.5, chartW / visible.length - 1.5);
 
     // Grid
     ctx.strokeStyle = "#141929"; ctx.lineWidth = 0.5;
@@ -302,73 +329,119 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     // BB Fill
     if (showBB) {
       ctx.beginPath();
-      data.forEach((d, i) => { if (d.bbUpper) { i === 0 ? ctx.moveTo(xPos(i), yP(d.bbUpper)) : ctx.lineTo(xPos(i), yP(d.bbUpper)); }});
-      data.slice().reverse().forEach((d, i) => { if (d.bbLower) ctx.lineTo(xPos(data.length - 1 - i), yP(d.bbLower)); });
+      visible.forEach((d, i) => { if (d.bbUpper) { i === 0 ? ctx.moveTo(xPos(i), yP(d.bbUpper)) : ctx.lineTo(xPos(i), yP(d.bbUpper)); } });
+      visible.slice().reverse().forEach((d, i) => { if (d.bbLower) ctx.lineTo(xPos(visible.length - 1 - i), yP(d.bbLower)); });
       ctx.closePath(); ctx.fillStyle = "#00d4ff08"; ctx.fill();
       ["bbUpper", "bbMiddle", "bbLower"].forEach(key => {
         ctx.strokeStyle = "#00d4ff35"; ctx.lineWidth = 0.8; ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        data.forEach((d, i) => { if (!d[key]) return; i === 0 ? ctx.moveTo(xPos(i), yP(d[key])) : ctx.lineTo(xPos(i), yP(d[key])); });
+        visible.forEach((d, i) => { if (!d[key]) return; i === 0 ? ctx.moveTo(xPos(i), yP(d[key])) : ctx.lineTo(xPos(i), yP(d[key])); });
         ctx.stroke(); ctx.setLineDash([]);
       });
     }
 
-    // EMA lines
-    if (showEMA20) { ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema20) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema20)) : ctx.lineTo(xPos(i), yP(d.ema20)); }); ctx.stroke(); }
-    if (showEMA50) { ctx.strokeStyle = "#ff8c00"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema50) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema50)) : ctx.lineTo(xPos(i), yP(d.ema50)); }); ctx.stroke(); }
-    if (showEMA200) { ctx.strokeStyle = "#b388ff"; ctx.lineWidth = 1.2; ctx.beginPath(); data.forEach((d, i) => { if (!d.ema200) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema200)) : ctx.lineTo(xPos(i), yP(d.ema200)); }); ctx.stroke(); }
+    // EMA
+    if (showEMA20) { ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 1.2; ctx.beginPath(); visible.forEach((d, i) => { if (!d.ema20) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema20)) : ctx.lineTo(xPos(i), yP(d.ema20)); }); ctx.stroke(); }
+    if (showEMA50) { ctx.strokeStyle = "#ff8c00"; ctx.lineWidth = 1.2; ctx.beginPath(); visible.forEach((d, i) => { if (!d.ema50) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema50)) : ctx.lineTo(xPos(i), yP(d.ema50)); }); ctx.stroke(); }
+    if (showEMA200) { ctx.strokeStyle = "#b388ff"; ctx.lineWidth = 1.2; ctx.beginPath(); visible.forEach((d, i) => { if (!d.ema200) return; i === 0 ? ctx.moveTo(xPos(i), yP(d.ema200)) : ctx.lineTo(xPos(i), yP(d.ema200)); }); ctx.stroke(); }
 
     // Linee orizzontali
-    const hLines = [
-      { v: support, c: "#00e676", label: "SUP" },
-      { v: resistance, c: "#ff3d5a", label: "RES" },
-      { v: entryTrigger, c: "#00d4ff", label: "ENTRY" },
-      { v: tpTrigger, c: "#00e676", label: "TP" },
-      { v: slTrigger, c: "#ff3d5a", label: "SL" },
-    ];
-    hLines.forEach(({ v, c, label }) => {
+    [{ v: support, c: "#00e676", l: "SUP" }, { v: resistance, c: "#ff3d5a", l: "RES" },
+     { v: entryTrigger, c: "#00d4ff", l: "ENTRY" }, { v: tpTrigger, c: "#00e676", l: "TP" }, { v: slTrigger, c: "#ff3d5a", l: "SL" }
+    ].forEach(({ v, c, l }) => {
       if (!v) return;
       ctx.strokeStyle = c + "80"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(padL, yP(v)); ctx.lineTo(W - padR, yP(v)); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = c; ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
-      ctx.fillText(label, padL + 4, yP(v) - 2);
+      ctx.fillText(l, padL + 4, yP(v) - 2);
     });
 
-    // CANDELE
-    data.forEach((d, i) => {
-      const open = d.open ?? d.close;
-      const high = d.high ?? d.close;
-      const low = d.low ?? d.close;
-      const close = d.close;
+    // Candele
+    visible.forEach((d, i) => {
+      const open = d.open ?? d.close, high = d.high ?? d.close;
+      const low = d.low ?? d.close, close = d.close;
       const isGreen = close >= open;
       const color = isGreen ? "#00e676" : "#ff3d5a";
       const x = xPos(i);
-
-      // Stoppino
       ctx.strokeStyle = color; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(x, yP(high)); ctx.lineTo(x, yP(low)); ctx.stroke();
-
-      // Corpo
       const bodyTop = yP(Math.max(open, close));
-      const bodyBot = yP(Math.min(open, close));
-      const bodyH = Math.max(1, bodyBot - bodyTop);
+      const bodyH = Math.max(1, yP(Math.min(open, close)) - bodyTop);
       ctx.fillStyle = isGreen ? "#00e676cc" : "#ff3d5acc";
       ctx.fillRect(x - cw / 2, bodyTop, cw, bodyH);
       ctx.strokeStyle = color; ctx.lineWidth = 0.5;
       ctx.strokeRect(x - cw / 2, bodyTop, cw, bodyH);
     });
 
-    // Date labels
+    // Date
     ctx.fillStyle = "#3a4a6b"; ctx.font = "8px monospace"; ctx.textAlign = "center";
-    const step = Math.max(1, Math.floor(data.length / 6));
-    data.forEach((d, i) => { if (i % step === 0) ctx.fillText(d.time, xPos(i), H - 5); });
+    const step = Math.max(1, Math.floor(visible.length / 6));
+    visible.forEach((d, i) => { if (i % step === 0) ctx.fillText(d.time, xPos(i), H - 5); });
 
-  }, [data, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger]);
+    // Info candele visibili
+    ctx.fillStyle = "#3a4a6b"; ctx.font = "8px monospace"; ctx.textAlign = "right";
+    ctx.fillText(`${visible.length} candele`, W - padR, padT + 10);
+  }, [data, viewStart, viewCount, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger]);
+
+  useEffect(() => { drawChart(); }, [drawChart]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => drawChart());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [drawChart]);
+
+  // Drag to pan
+  const getClientX = (e) => e.touches ? e.touches[0].clientX : e.clientX;
+  const onDown = (e) => {
+    isDragging.current = true;
+    dragStartX.current = getClientX(e);
+    dragStartView.current = getStart();
+  };
+  const onMove = (e) => {
+    if (!isDragging.current) return;
+    const canvas = canvasRef.current; if (!canvas) return;
+    const dx = getClientX(e) - dragStartX.current;
+    const candlesPerPx = getCount() / (canvas.width - 66);
+    const shift = Math.round(-dx * candlesPerPx);
+    const newStart = Math.max(0, Math.min(data.length - getCount(), dragStartView.current + shift));
+    setViewStart(newStart);
+  };
+  const onUp = () => { isDragging.current = false; };
+
+  const btnStyle = (active) => ({
+    padding: "6px 14px", fontSize: 13, fontWeight: 800,
+    background: active ? "#00d4ff22" : "#0b0e1a",
+    color: active ? "#00d4ff" : "#7c8db5",
+    border: `1px solid ${active ? "#00d4ff" : "#141929"}`,
+    borderRadius: 8, cursor: "pointer", userSelect: "none",
+  });
 
   return (
-    <div ref={containerRef} style={{ width: "100%" }}>
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: 280 }} />
+    <div style={{ width: "100%" }}>
+      {/* Controlli zoom */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={panLeft} style={btnStyle(false)}>◀</button>
+          <button onClick={panRight} style={btnStyle(false)}>▶</button>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={zoomIn} style={btnStyle(false)}>🔍 +</button>
+          <button onClick={zoomOut} style={btnStyle(false)}>🔍 −</button>
+          <button onClick={reset} style={btnStyle(false)}>↺</button>
+        </div>
+      </div>
+      <div ref={containerRef} style={{ width: "100%", cursor: isDragging.current ? "grabbing" : "grab", touchAction: "none" }}
+        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+        onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}>
+        <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: 280 }} />
+      </div>
+      <div style={{ fontSize: 10, color: "#3a4a6b", textAlign: "center", marginTop: 4 }}>
+        ◀ ▶ scorri · 🔍+ zoom in · 🔍− zoom out · trascina per muoverti
+      </div>
     </div>
   );
 }
