@@ -428,13 +428,13 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     if (currentClose) {
       const y = yP(currentClose);
       ctx.strokeStyle = "#00d4ff"; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR - 70, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       ctx.setLineDash([]);
       const label = "$" + (currentClose > 999 ? currentClose.toFixed(0) : currentClose.toFixed(2));
       ctx.fillStyle = "#00d4ff";
-      ctx.fillRect(W - padR - 68, y - 9, 68, 16);
+      ctx.fillRect(0, y - 9, padL - 2, 16);
       ctx.fillStyle = "#000"; ctx.font = "bold 11px monospace"; ctx.textAlign = "right";
-      ctx.fillText(label, W - padR - 2, y + 4);
+      ctx.fillText(label, padL - 4, y + 4);
     }
 
     // Info
