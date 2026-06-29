@@ -265,23 +265,65 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartView = useRef(0);
+  const viewStartRef = useRef(0);
+  const viewCountRef = useRef(null);
 
-  const getCount = () => viewCount ?? data.length;
-  const getStart = () => Math.max(0, Math.min(data.length - getCount(), viewStart));
+  // Sync refs with state
+  useEffect(() => { viewStartRef.current = viewStart; }, [viewStart]);
+  useEffect(() => { viewCountRef.current = viewCount; }, [viewCount]);
 
-  const zoomIn = () => {
-    const newCount = Math.max(10, Math.floor(getCount() * 0.6));
-    const center = getStart() + Math.floor(getCount() / 2);
+  const getCount = useCallback(() => viewCountRef.current ?? data.length, [data.length]);
+  const getStart = useCallback(() => {
+    const count = viewCountRef.current ?? data.length;
+    return Math.max(0, Math.min(data.length - count, viewStartRef.current));
+  }, [data.length]);
+
+  const zoomIn = useCallback(() => {
+    const count = getCount();
+    const start = getStart();
+    const newCount = Math.max(8, Math.floor(count * 0.6));
+    const center = start + Math.floor(count / 2);
+    const newStart = Math.max(0, Math.min(data.length - newCount, center - Math.floor(newCount / 2)));
+    viewCountRef.current = newCount;
+    viewStartRef.current = newStart;
     setViewCount(newCount);
-    setViewStart(Math.max(0, center - Math.floor(newCount / 2)));
-  };
-  const zoomOut = () => {
-    const newCount = Math.min(data.length, Math.floor(getCount() * 1.6));
+    setViewStart(newStart);
+  }, [data.length, getCount, getStart]);
+
+  const zoomOut = useCallback(() => {
+    const count = getCount();
+    const start = getStart();
+    const newCount = Math.min(data.length, Math.floor(count * 1.6));
+    const center = start + Math.floor(count / 2);
+    const newStart = Math.max(0, Math.min(data.length - newCount, center - Math.floor(newCount / 2)));
+    viewCountRef.current = newCount;
+    viewStartRef.current = newStart;
     setViewCount(newCount);
-  };
-  const panLeft = () => setViewStart(s => Math.max(0, s - Math.floor(getCount() * 0.3)));
-  const panRight = () => setViewStart(s => Math.min(data.length - getCount(), s + Math.floor(getCount() * 0.3)));
-  const reset = () => { setViewCount(null); setViewStart(0); };
+    setViewStart(newStart);
+  }, [data.length, getCount, getStart]);
+
+  const panLeft = useCallback(() => {
+    const count = getCount();
+    const start = getStart();
+    const newStart = Math.max(0, start - Math.max(1, Math.floor(count * 0.3)));
+    viewStartRef.current = newStart;
+    setViewStart(newStart);
+  }, [getCount, getStart]);
+
+  const panRight = useCallback(() => {
+    const count = getCount();
+    const start = getStart();
+    const newStart = Math.min(data.length - count, start + Math.max(1, Math.floor(count * 0.3)));
+    viewStartRef.current = newStart;
+    setViewStart(newStart);
+  }, [data.length, getCount, getStart]);
+
+  const reset = useCallback(() => {
+    viewCountRef.current = null;
+    viewStartRef.current = 0;
+    setViewCount(null);
+    setViewStart(0);
+  }, []);
 
   const drawChart = useCallback(() => {
     const canvas = canvasRef.current;
@@ -294,8 +336,8 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     const padL = 58, padR = 8, padT = 10, padB = 22;
     const chartW = W - padL - padR, chartH = H - padT - padB;
 
-    const start = getStart();
-    const count = getCount();
+    const count = viewCountRef.current ?? data.length;
+    const start = Math.max(0, Math.min(data.length - count, viewStartRef.current));
     const visible = data.slice(start, start + count);
     if (!visible.length) return;
 
@@ -319,7 +361,7 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     const cw = Math.max(1.5, chartW / visible.length - 1.5);
 
     // Grid
-    ctx.strokeStyle = "#141929"; ctx.lineWidth = 0.5;
+    ctx.strokeStyle = "#1e2840"; ctx.lineWidth = 0.5;
     for (let i = 0; i <= 5; i++) {
       const y = padT + (chartH / 5) * i;
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
@@ -386,9 +428,8 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
     if (currentClose) {
       const y = yP(currentClose);
       ctx.strokeStyle = "#00d4ff"; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR - 70, y); ctx.stroke();
       ctx.setLineDash([]);
-      // Box prezzo
       const label = "$" + (currentClose > 999 ? currentClose.toFixed(0) : currentClose.toFixed(2));
       ctx.fillStyle = "#00d4ff";
       ctx.fillRect(W - padR - 68, y - 9, 68, 16);
@@ -396,9 +437,10 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
       ctx.fillText(label, W - padR - 2, y + 4);
     }
 
-    // Info candele visibili
-    ctx.fillStyle = "#546e7a"; ctx.font = "10px monospace"; ctx.textAlign = "right";
-    ctx.fillText(`${visible.length} candele`, W - padR - 72, padT + 12);
+    // Info
+    ctx.fillStyle = "#546e7a"; ctx.font = "10px monospace"; ctx.textAlign = "left";
+    ctx.fillText(`${visible.length}/${data.length} candele`, padL + 4, padT + 12);
+
   }, [data, viewStart, viewCount, showEMA20, showEMA50, showEMA200, showBB, support, resistance, entryTrigger, tpTrigger, slTrigger]);
 
   useEffect(() => { drawChart(); }, [drawChart]);
@@ -416,48 +458,52 @@ function CandleCanvas({ data, showEMA20, showEMA50, showEMA200, showBB, support,
   const onDown = (e) => {
     isDragging.current = true;
     dragStartX.current = getClientX(e);
-    dragStartView.current = getStart();
+    dragStartView.current = viewStartRef.current;
   };
   const onMove = (e) => {
     if (!isDragging.current) return;
     const canvas = canvasRef.current; if (!canvas) return;
+    const count = viewCountRef.current ?? data.length;
     const dx = getClientX(e) - dragStartX.current;
-    const candlesPerPx = getCount() / (canvas.width - 66);
+    const candlesPerPx = count / (canvas.width - 66);
     const shift = Math.round(-dx * candlesPerPx);
-    const newStart = Math.max(0, Math.min(data.length - getCount(), dragStartView.current + shift));
+    const newStart = Math.max(0, Math.min(data.length - count, dragStartView.current + shift));
+    viewStartRef.current = newStart;
     setViewStart(newStart);
   };
   const onUp = () => { isDragging.current = false; };
 
-  const btnStyle = (active) => ({
-    padding: "6px 14px", fontSize: 13, fontWeight: 800,
-    background: active ? "#00d4ff22" : "#0b0e1a",
-    color: active ? "#00d4ff" : "#7c8db5",
-    border: `1px solid ${active ? "#00d4ff" : "#141929"}`,
-    borderRadius: 8, cursor: "pointer", userSelect: "none",
-  });
+  const btn = (label, onClick, color) => (
+    <button onClick={onClick} style={{
+      padding: "8px 16px", fontSize: 14, fontWeight: 800,
+      background: "#0b0e1a", color: color || "#e8edf8",
+      border: `1px solid ${color || "#1e2840"}`,
+      borderRadius: 8, cursor: "pointer", userSelect: "none", minWidth: 44,
+    }}>{label}</button>
+  );
 
   return (
     <div style={{ width: "100%" }}>
-      {/* Controlli zoom */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={panLeft} style={btnStyle(false)}>◀</button>
-          <button onClick={panRight} style={btnStyle(false)}>▶</button>
+          {btn("◀◀", () => { viewStartRef.current = 0; setViewStart(0); }, "#546e7a")}
+          {btn("◀", panLeft, "#00d4ff")}
+          {btn("▶", panRight, "#00d4ff")}
+          {btn("▶▶", () => { const c = viewCountRef.current ?? data.length; viewStartRef.current = Math.max(0, data.length - c); setViewStart(Math.max(0, data.length - c)); }, "#546e7a")}
         </div>
         <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={zoomIn} style={btnStyle(false)}>🔍 +</button>
-          <button onClick={zoomOut} style={btnStyle(false)}>🔍 −</button>
-          <button onClick={reset} style={btnStyle(false)}>↺</button>
+          {btn("🔍+", zoomIn, "#00e676")}
+          {btn("🔍−", zoomOut, "#ff3d5a")}
+          {btn("↺", reset, "#ffd600")}
         </div>
       </div>
-      <div ref={containerRef} style={{ width: "100%", cursor: isDragging.current ? "grabbing" : "grab", touchAction: "none" }}
+      <div ref={containerRef} style={{ width: "100%", cursor: "grab", touchAction: "none" }}
         onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
         onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}>
         <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: 280 }} />
       </div>
       <div style={{ fontSize: 10, color: "#3a4a6b", textAlign: "center", marginTop: 4 }}>
-        ◀ ▶ scorri · 🔍+ zoom in · 🔍− zoom out · trascina per muoverti
+        ◀◀ inizio · ◀ ▶ scorri · 🔍+ zoom in · 🔍− zoom out · ↺ reset · trascina per muoverti
       </div>
     </div>
   );
