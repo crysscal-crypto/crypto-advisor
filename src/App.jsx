@@ -18,10 +18,12 @@ const COINS = [
 ];
 
 const TIMEFRAMES = [
-  { label: "1G", days: 1 },
-  { label: "7G", days: 7 },
-  { label: "30G", days: 30 },
-  { label: "90G", days: 90 },
+  { label: "30M", days: 1, limit: 24 },
+  { label: "1H", days: 2, limit: 48 },
+  { label: "4H", days: 7, limit: 42 },
+  { label: "1G", days: 14, limit: 56 },
+  { label: "1S", days: 30, limit: 60 },
+  { label: "3M", days: 90, limit: 90 },
 ];
 
 const proxy = (url) => `/api/proxy?url=${encodeURIComponent(url)}`;
@@ -502,7 +504,7 @@ export default function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [countdown, setCountdown] = useState(60);
   const [chartData, setChartData] = useState([]);
-  const [chartTF, setChartTF] = useState(TIMEFRAMES[2]);
+  const [chartTF, setChartTF] = useState(TIMEFRAMES[3]);
   const [chartLoading, setChartLoading] = useState(false);
   const [showEMA20, setShowEMA20] = useState(true);
   const [showEMA50, setShowEMA50] = useState(true);
@@ -511,11 +513,13 @@ export default function App() {
   const [botConfig, setBotConfig] = useState({ active: false, type: "spot", priceMin: "", priceMax: "", gridCount: "", capital: "" });
   const [triggers, setTriggers] = useState({ entry: "", tp: "", sl: "" });
 
-  const fetchChart = useCallback(async (coinId, days) => {
+  const fetchChart = useCallback(async (coinId, days, limit) => {
     setChartLoading(true);
     try {
       const ohlcRes = await fetch(proxy(`https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`));
-      const ohlcData = await ohlcRes.json();
+      const rawOhlc = await ohlcRes.json();
+      // Prendi solo le ultime `limit` candele per evitare appiattimento
+      const ohlcData = limit ? rawOhlc.slice(-limit) : rawOhlc;
       const closes = ohlcData.map(c => c[4]);
       const ema20s = calcEMASeries(closes, 20);
       const ema50s = calcEMASeries(closes, 50);
@@ -526,8 +530,8 @@ export default function App() {
 
       const fmt = (ts) => {
         const d = new Date(ts);
-        if (days <= 1) return d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-        if (days <= 7) return d.toLocaleDateString("it-IT", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+        if (days <= 2) return d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+        if (days <= 14) return d.toLocaleDateString("it-IT", { weekday: "short", hour: "2-digit", minute: "2-digit" });
         return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" });
       };
 
@@ -601,13 +605,13 @@ export default function App() {
 
   useEffect(() => {
     fetchMarket();
-    fetchChart(coin.id, chartTF.days);
+    fetchChart(coin.id, chartTF.days, chartTF.limit);
     const i = setInterval(fetchMarket, 60000);
     return () => clearInterval(i);
   }, [fetchMarket, coin]);
 
   useEffect(() => {
-    if (tab === "grafico") fetchChart(coin.id, chartTF.days);
+    if (tab === "grafico") fetchChart(coin.id, chartTF.days, chartTF.limit);
   }, [chartTF, tab]);
 
   useEffect(() => { if (loading) return; const i = setInterval(() => setCountdown(c => c > 0 ? c - 1 : 0), 1000); return () => clearInterval(i); }, [loading]);
