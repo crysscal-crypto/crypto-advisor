@@ -48,7 +48,7 @@ async function analisiAI(request, env) {
   const { prompt } = await request.json().catch(() => ({}));
   if (!prompt || typeof prompt !== "string" || prompt.length > 4000) return json({ error: "Richiesta non valida" }, 400);
 
-  const modelli = [env.GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash"].filter(Boolean);
+  const modelli = [env.GEMINI_MODEL, "gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-lite-latest"].filter(Boolean);
   let ultimoErrore = "";
   for (const modello of modelli) {
     try {
