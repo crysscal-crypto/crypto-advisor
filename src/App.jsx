@@ -204,13 +204,14 @@ SUPPORTO: $${indicators.sr?.support?.toFixed(2)} | RESISTENZA: $${indicators.sr?
 ${botConfig.active ? `BOT: ${botConfig.type}, $${botConfig.priceMin}-$${botConfig.priceMax}, ${botConfig.gridCount} griglie, $${botConfig.capital}` : "Nessun bot."}
 ${triggers.entry ? `ENTRY: $${triggers.entry}` : ""} ${triggers.tp ? `TP: $${triggers.tp}` : ""} ${triggers.sl ? `SL: $${triggers.sl}` : ""}
 Rispondi: 1.SITUAZIONE 2.COSA FARE ORA 3.RISCHI 4.LIVELLI CHIAVE. Max 250 parole.`;
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  // L'analisi la fa il server (Gemini, gratuito): la chiave non è mai nel browser
+  const response = await fetch("/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
+    body: JSON.stringify({ prompt })
   });
-  const data = await response.json();
-  return data.content?.[0]?.text ?? "Analisi non disponibile.";
+  const data = await response.json().catch(() => ({}));
+  return data.text ?? data.error ?? "Analisi non disponibile.";
 }
 
 // Candlestick custom shape
